@@ -1,0 +1,24 @@
+# Core ML
+torch>=2.1
+numpy>=1.24
+
+# Data
+h5py>=3.9
+# pylhe is optional; the bundled parser in paper1_demo.gatr_lite.data.lhe_parser
+# reads the LHE files directly and only depends on the standard library.
+
+# Plotting / evaluation
+matplotlib>=3.7
+
+# Reading the REF baseline (Keras h5)
+# tensorflow is *not* required: we re-load the weights into a PyTorch RefMLP.
+# h5py above is sufficient.
+
+# Optional: read the REF exam ROOT ntuple (`scripts/ref_inference{,_lhe}.py`)
+# uproot>=5
+
+# Testing
+pytest>=7
+
+# Optional: TensorBoard logging during training
+# tensorboard>=2.13
