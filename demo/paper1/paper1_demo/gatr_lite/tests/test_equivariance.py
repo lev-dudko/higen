@@ -13,8 +13,8 @@ import numpy as np
 import pytest
 import torch
 
-from src.paper1_demo.gatr_lite.gatr import algebra as A
-from src.paper1_demo.gatr_lite.gatr.layers import (
+from paper1_demo.gatr_lite.gatr import algebra as A
+from paper1_demo.gatr_lite.gatr.layers import (
     BlockConfig,
     EquivariantLinear,
     GATrBlock,
@@ -23,7 +23,7 @@ from src.paper1_demo.gatr_lite.gatr.layers import (
     JoinProduct,
     ScalarAttention,
 )
-from src.paper1_demo.gatr_lite.gatr.model import GATrLite, GATrLiteConfig
+from paper1_demo.gatr_lite.gatr.model import GATrLite, GATrLiteConfig
 
 
 SEED = 1234

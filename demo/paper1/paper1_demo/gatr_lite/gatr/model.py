@@ -171,6 +171,51 @@ class GATrLiteConfig:
     # on deep gp-residual interactions through symmetric GeometricProduct.
     use_join_block: bool = True
 
+    # ---------------------------------------------------------------------
+    # Input-ablation knobs (Tab. 3 and Fig. 5 of the paper).
+    # These control *which grades are populated at the input layer*, leaving
+    # the architecture untouched, so that the contribution of the higher-grade
+    # input channels can be measured separately from network capacity.
+    # ---------------------------------------------------------------------
+    # Covariant content of the two pairing tokens (use_pairing_cache=True):
+    #   "full"         -- grade 1 (*T), grade 2 (meet), grade 3 (T)  [default,
+    #                     the configuration described in the manuscript]
+    #   "no_meet"      -- drop the grade-2 meet bivector, keep grades 1 and 3
+    #   "scalars_only" -- drop all covariant content, keep the grade-0 pairing
+    #                     invariants (Breit-Wigner pulls, sigma+/-, m_W,
+    #                     coplanarity, pseudoscalar_4) on the scalar channels
+    # The parameter count is identical across the three settings: only the
+    # numerical content of the input tensor changes.
+    pairing_content: str = "full"
+
+    # Append two fixed reference tokens carrying the time direction gamma_0
+    # and the beam axis gamma_3 as grade-1 covariants. This is the mechanism
+    # by which H_LHC-invariant quantities become accessible without changing
+    # the architecture (Report #1, point 11): scalar products of the physical
+    # tokens with these two tokens give p_T, y and phi. Equivariance is
+    # preserved -- the reference tokens transform as ordinary grade-1 objects.
+    reference_tokens: bool = False
+
+    # Which reference object to use when reference_tokens=True. The choice is
+    # NOT cosmetic — it decides which subgroup survives (verified in
+    # tests/test_hlhc_reference.py):
+    #   "vectors"  -- two tokens carrying gamma_0 and gamma_3. Supplies the
+    #                 INGREDIENTS of p_T, y, phi as scalar products, but is not
+    #                 H_LHC-invariant: <T,gamma_0>=E and <T,gamma_3>=p_z each
+    #                 change under a longitudinal boost (|dlogit| ~ 2e-6).
+    #   "bivector" -- one token carrying gamma_03. Invariant under BOTH H_LHC
+    #                 generators to float64, because the (t,z) plane is
+    #                 preserved by longitudinal boosts and untouched by
+    #                 azimuthal rotations. This is the variant that realises
+    #                 the H_LHC reduction by construction.
+    reference_mode: str = "vectors"
+
+    # Zero every covariant (grade >= 1) input channel, leaving only grade-0
+    # scalars. This is the PELICAN-like limit of the input representation:
+    # the network sees Lorentz invariants only. Used as the lower rung of the
+    # ablation ladder.
+    grade0_only: bool = False
+
 
 # ---------------------------------------------------------------------------
 # Scalar feature embeddings
@@ -217,6 +262,18 @@ class GATrLite(nn.Module):
     def __init__(self, cfg: GATrLiteConfig | None = None):
         super().__init__()
         self.cfg = cfg or GATrLiteConfig()
+
+        if self.cfg.reference_mode not in ("vectors", "bivector"):
+            raise ValueError(
+                "reference_mode must be 'vectors' or 'bivector'; "
+                f"got {self.cfg.reference_mode!r}"
+            )
+
+        if self.cfg.pairing_content not in ("full", "no_meet", "scalars_only"):
+            raise ValueError(
+                "pairing_content must be one of 'full', 'no_meet', "
+                f"'scalars_only'; got {self.cfg.pairing_content!r}"
+            )
 
         if self.cfg.use_pairing_cache:
             # Full layout: 8 flavor slots, 20 scalar channels, 6 + 2 tokens.
@@ -392,24 +449,31 @@ class GATrLite(nn.Module):
         #   - tokens 6, 7: *T_had^(a) (grade 1) + meet^(a) (grade 2) + T_had^(a) (grade 3)
         for mu in range(4):
             out[:, :6, 0, A.GRADE1_INDICES[mu]] = p4[:, :, mu]
-        # *T_had on pairing tokens — grade-1 components.
-        out[:, 6:8, 0, :] = out[:, 6:8, 0, :] + pf["T_dual_pair"]
-        # meet on pairing tokens — grade-2 components.
-        for i in A.GRADE_INDICES[2]:
-            out[:, 6, 0, i] = out[:, 6, 0, i] + pf["meet_pair"][:, 0, i]
-            out[:, 7, 0, i] = out[:, 7, 0, i] + pf["meet_pair"][:, 1, i]
-        # T_had on pairing tokens — grade-3 components.
-        for i in A.GRADE_INDICES[3]:
-            out[:, 6, 0, i] = out[:, 6, 0, i] + pf["T_pair"][:, 0, i]
-            out[:, 7, 0, i] = out[:, 7, 0, i] + pf["T_pair"][:, 1, i]
-
-        # Channel 1 covariant components (only on pairing tokens; zero on
-        # physical partons): *T_lep (grade 1) + T_lep (grade 3).
-        if self._n_cov_channels >= 2:
-            out[:, 6:8, 1, :] = out[:, 6:8, 1, :] + pf["T_lep_dual_pair"]
+        # Covariant content of the pairing tokens. Under the ablation setting
+        # "scalars_only" none of it is written, so the pairing tokens carry
+        # grade-0 invariants alone; under "no_meet" the grade-2 meet bivector
+        # is omitted while grades 1 and 3 are kept.
+        content = self.cfg.pairing_content
+        if content != "scalars_only":
+            # *T_had on pairing tokens — grade-1 components.
+            out[:, 6:8, 0, :] = out[:, 6:8, 0, :] + pf["T_dual_pair"]
+            # meet on pairing tokens — grade-2 components.
+            if content == "full":
+                for i in A.GRADE_INDICES[2]:
+                    out[:, 6, 0, i] = out[:, 6, 0, i] + pf["meet_pair"][:, 0, i]
+                    out[:, 7, 0, i] = out[:, 7, 0, i] + pf["meet_pair"][:, 1, i]
+            # T_had on pairing tokens — grade-3 components.
             for i in A.GRADE_INDICES[3]:
-                out[:, 6, 1, i] = out[:, 6, 1, i] + pf["T_lep_pair"][:, 0, i]
-                out[:, 7, 1, i] = out[:, 7, 1, i] + pf["T_lep_pair"][:, 1, i]
+                out[:, 6, 0, i] = out[:, 6, 0, i] + pf["T_pair"][:, 0, i]
+                out[:, 7, 0, i] = out[:, 7, 0, i] + pf["T_pair"][:, 1, i]
+
+            # Channel 1 covariant components (only on pairing tokens; zero on
+            # physical partons): *T_lep (grade 1) + T_lep (grade 3).
+            if self._n_cov_channels >= 2:
+                out[:, 6:8, 1, :] = out[:, 6:8, 1, :] + pf["T_lep_dual_pair"]
+                for i in A.GRADE_INDICES[3]:
+                    out[:, 6, 1, i] = out[:, 6, 1, i] + pf["T_lep_pair"][:, 0, i]
+                    out[:, 7, 1, i] = out[:, 7, 1, i] + pf["T_lep_pair"][:, 1, i]
 
         # Channels c_cov..(c_cov + n_scalars - 1): grade-0 scalar features.
         c_cov = self._n_cov_channels
@@ -417,14 +481,66 @@ class GATrLite(nn.Module):
 
         return out
 
+    def _append_reference_tokens(self, out: torch.Tensor) -> torch.Tensor:
+        """Append fixed reference tokens that single out the lab frame.
+
+        Two variants, selected by ``cfg.reference_mode`` — the choice decides
+        which subgroup of Spin+(1,3) survives (Report #1, point 11):
+
+        ``"vectors"``  two tokens carrying gamma_0 (time) and gamma_3 (beam).
+            They let the invariant head form ``<T_i, gamma_0> = E_i`` and
+            ``<T_i, gamma_3> = p_z,i``, the ingredients of p_T, y and phi. But
+            each of those changes under a longitudinal boost — only the
+            combination p_T does not — so H_LHC-invariance would have to be
+            learned, not enforced.
+
+        ``"bivector"``  one token carrying gamma_03, the (t,z) plane itself.
+            Longitudinal boosts preserve that plane and azimuthal rotations do
+            not touch it, so the network is H_LHC-equivariant by construction.
+
+        Either way the tokens are ordinary multivectors: the rotor sandwich
+        acts on them as on any other object, and they carry no scalar features,
+        so an all-zero one-hot distinguishes them from physical objects.
+        """
+        B, T, C, _ = out.shape
+        if self.cfg.reference_mode == "bivector":
+            ref = torch.zeros(B, 1, C, 16, dtype=out.dtype, device=out.device)
+            # gamma_03 = e_0 ^ e_3: locate its index in the grade-2 basis.
+            basis = A._build_basis()
+            for i in A.GRADE_INDICES[2]:
+                if basis[i] == (0, 3):
+                    ref[:, 0, 0, i] = 1.0
+                    break
+        else:
+            ref = torch.zeros(B, 2, C, 16, dtype=out.dtype, device=out.device)
+            # Channel 0, grade-1 slots: gamma_0 on token 0, gamma_3 on token 1.
+            ref[:, 0, 0, A.GRADE1_INDICES[0]] = 1.0
+            ref[:, 1, 0, A.GRADE1_INDICES[3]] = 1.0
+        return torch.cat([out, ref], dim=1)
+
     def embed(self, p4: torch.Tensor, pdg: torch.Tensor) -> torch.Tensor:
         """Build the (B, T, C_in, 16) multivector input from p4 + pdg.
 
-        T is 6 if ``use_pairing_cache=False`` and 8 otherwise.
+        T is 6 if ``use_pairing_cache=False`` and 8 otherwise, plus 2 more if
+        ``reference_tokens=True``.
         """
         if self.cfg.use_pairing_cache:
-            return self._embed_with_pairing(p4, pdg)
-        return self._embed_legacy(p4, pdg)
+            out = self._embed_with_pairing(p4, pdg)
+        else:
+            out = self._embed_legacy(p4, pdg)
+
+        if self.cfg.reference_tokens:
+            out = self._append_reference_tokens(out)
+
+        if self.cfg.grade0_only:
+            # PELICAN-like limit: keep grade-0 coefficients only. The scalar
+            # channels (which carry the one-hot, charge, b-tag and the pairing
+            # invariants) live at basis index 0 and are untouched.
+            mask = torch.zeros(16, dtype=out.dtype, device=out.device)
+            mask[0] = 1.0
+            out = out * mask
+
+        return out
 
     def forward(self, p4: torch.Tensor, pdg: torch.Tensor) -> torch.Tensor:
         """Return logits of shape (B, 1)."""

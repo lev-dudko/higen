@@ -9,7 +9,7 @@ publications listed below.
 
 | Path | What is in it |
 |------|---------------|
-| `demo/paper1/` | Self-contained reference implementation of the GATr-lite demo used in our first paper: a Lorentz-equivariant classifier that separates single-resonant $tWb$ from double-resonant $t\bar t$ production at the LHE parton level (14 TeV, CompHEP 4.5.2rc12). Includes pretrained weights and a 75-feature MLP baseline. |
+| `demo/paper1/` | Self-contained reference implementation of the GATr-lite demo used in our first paper: a Lorentz-equivariant classifier that separates single-resonant $tWb$ from double-resonant $t\bar t$ production at the LHE parton level (14 TeV, CompHEP 4.5.2rc12). Includes pretrained weights, a 75-feature MLP baseline, and the eight-configuration input ablation of the revised paper. |
 | `doc/paper1/` | Final PDF of the first paper. *(Coming soon.)* |
 
 ## Why this exists
@@ -20,6 +20,15 @@ top-physics group for two decades, so that the geometric-algebra
 network can be compared one-to-one with the high-level-feature
 baseline of [Boos:2023kpp] (arXiv:2306.08793). The companion code
 makes that comparison reproducible end-to-end from raw LHE inputs.
+
+It also makes the paper's central measurement reproducible: an ablation
+over eight input representations that separates what supplying algebraic
+content explicitly can and cannot buy. Content the network can
+reconstruct from the measured momenta adds nothing when supplied at the
+input layer; a fixed reference blade encoding the beam plane, which no
+product of those momenta generates, is worth a substantial gain at no
+extra parameters. The flags that select each configuration are listed in
+[`demo/paper1/README.md`](demo/paper1/README.md).
 
 ## Quick start
 

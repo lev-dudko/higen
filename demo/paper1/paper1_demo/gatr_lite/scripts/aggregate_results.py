@@ -66,7 +66,7 @@ def _roc_curve(
     distinct = np.r_[np.diff(s) != 0, True]
     fpr = np.r_[0.0, fpr[distinct]]
     tpr = np.r_[0.0, tpr[distinct]]
-    trap = getattr(np, "trapezoid", np.trapz)
+    trap = np.trapezoid if hasattr(np, "trapezoid") else np.trapz  # trapz removed in NumPy 2.0
     return fpr, tpr, float(trap(tpr, fpr))
 
 

@@ -17,9 +17,9 @@ import numpy as np
 import pytest
 import torch
 
-from src.paper1_demo.gatr_lite.gatr import algebra as A
-from src.paper1_demo.gatr_lite.gatr import pairing as P
-from src.paper1_demo.gatr_lite.gatr.model import (
+from paper1_demo.gatr_lite.gatr import algebra as A
+from paper1_demo.gatr_lite.gatr import pairing as P
+from paper1_demo.gatr_lite.gatr.model import (
     GATrLite,
     GATrLiteConfig,
     PDG_PAIRING_1,
@@ -308,7 +308,7 @@ def test_pairing_for_known_event():
 
 def test_pdg_sentinels_route_to_pairing_slots():
     """Sentinel PDG codes +100/-100 map to the two extra flavor slots."""
-    from src.paper1_demo.gatr_lite.gatr.model import PDG_TO_INDEX
+    from paper1_demo.gatr_lite.gatr.model import PDG_TO_INDEX
     assert PDG_TO_INDEX[PDG_PAIRING_1] == 6
     assert PDG_TO_INDEX[PDG_PAIRING_2] == 7
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import torch
 
-from src.paper1_demo.gatr_lite.gatr.model import GATrLite, GATrLiteConfig
+from paper1_demo.gatr_lite.gatr.model import GATrLite, GATrLiteConfig
 
 
 def test_forward_shapes_and_param_budget():

@@ -4,8 +4,7 @@ This directory contains a self-contained reference implementation of
 the geometric-algebra (GA) network used in the first paper of the
 `higen` programme, together with the high-level-feature MLP baseline
 of [Boos:2023kpp] (arXiv:2306.08793) and everything required to
-reproduce Fig. 5 / Fig. 6 / Tab. 3 of the paper from the raw LHE
-inputs.
+reproduce Tab. 3 and Figs. 5-7 of the paper from the raw LHE inputs.
 
 The task is a binary classification of single-resonant $gg\to tWb$
 events (DR1, label 1) against double-resonant $gg\to t\bar t$ events
@@ -14,14 +13,19 @@ SM tWb sample shown alongside as an unlabeled cross-check.
 
 The GA network has $\approx 1.5\times 10^{5}$ parameters and takes
 only the six final-state parton 4-momenta plus their PDG ids. It
-matches and slightly exceeds the 75-feature MLP baseline, which has
-$\approx 5.4\times 10^{5}$ parameters and consumes hand-crafted
-high-level inputs.
+exceeds the 75-feature MLP baseline, which has $\approx 5.4\times
+10^{5}$ parameters and consumes hand-crafted high-level inputs, at
+roughly a quarter of its parameter count.
 
 | Network | Inputs | Parameters | AUC (eval) |
 |---|---|---:|---:|
-| **GATr-lite** (5 seeds, this code) | 6 × 4-momenta + PDG | 151 009 | $0.9653 \pm 0.0006$ |
-| REF MLP [Boos:2023kpp] | 75 high-level features | 539 501 | $0.9594$ |
+| **GATr-lite**, four-momenta (5 seeds) | 6 × 4-momenta + PDG | 149 409 | $0.9669 \pm 0.0007$ |
+| **GATr-lite**, + reference bivector (5 seeds) | the same, plus one fixed $\gamma_{03}$ token | 149 409 | $0.9744 \pm 0.0007$ |
+| REF MLP [Boos:2023kpp] | 75 high-level features | 539 501 | $0.9586$ |
+
+Quoted uncertainties are the spread over the five seeds. The reference
+bivector is a fixed, weightless token encoding the beam plane, so it
+leaves the parameter count unchanged.
 
 The GA-network checkpoint of one representative seed is shipped under
 [`checkpoints/`](checkpoints/) and the REF Keras weights under
@@ -41,9 +45,9 @@ demo/paper1/
     └── gatr_lite/
         ├── data/             # LHE parser + preprocess to HDF5 + Dataset
         ├── gatr/             # Cl(1,3) algebra, equivariant layers, GATr-lite
-        ├── training/         # train.py, eval.py, ref_baseline.py, sweep/
-        ├── scripts/          # preprocess_all.sh, smoke_test.sh, plots, aggregate
-        └── tests/            # 51 pytest tests
+        ├── training/         # train.py, eval.py, ref_baseline.py, auc_stats.py, sweep/
+        ├── scripts/          # preprocess, smoke test, plots, aggregation, measurements
+        └── tests/            # pytest suite incl. equivariance and ablation knobs
 ```
 
 ## Physics setup
@@ -201,10 +205,75 @@ python -m paper1_demo.gatr_lite.scripts.aggregate_results \
 # writes auc_summary.csv, roc_band.{pdf,png}, discriminator.{pdf,png}, summary.json
 ```
 
+### 6. Reproduce the input ablation (Tab. 3, Fig. 5)
+
+Eight input representations, five seeds each. Every configuration is the
+same network on the same events; the flags change only what the input
+tensor carries. Configurations within a group have identical parameter
+counts, which is what makes the comparison a statement about the input
+rather than about capacity.
+
+| Input representation | Params | AUC | Flags added to the command in step 2 |
+|---|---:|---|---|
+| grade 0 only | 151 489 | $0.9627 \pm 0.0003$ | `--grade0-only` |
+| + pairing invariants | 151 489 | $0.9650 \pm 0.0003$ | `--pairing-content scalars_only` |
+| + pairing grades 1,2,3 | 151 489 | $0.9649 \pm 0.0008$ | *(default)* |
+| + grade-4 join | 196 609 | $0.9652 \pm 0.0009$ | `--use-join-block` |
+| + pairing 1,3 (no meet) | 151 489 | $0.9657 \pm 0.0009$ | `--pairing-content no_meet` |
+| grade 0⊕1 four-momenta | 149 409 | $0.9669 \pm 0.0007$ | `--no-pairing-cache` |
+| + reference tokens $\gamma_0,\gamma_3$ | 149 409 | $0.9670 \pm 0.0004$ | `--no-pairing-cache --reference-tokens --reference-mode vectors` |
+| **+ reference bivector $\gamma_{03}$** | 149 409 | $0.9744 \pm 0.0007$ | `--no-pairing-cache --reference-tokens --reference-mode bivector` |
+
+```bash
+# one configuration, one seed
+python -m paper1_demo.gatr_lite.training.train \
+    --signal ./data/dr1.h5 --background ./data/tT.h5 \
+    --out ./runs/A5b_s42 --epochs 50 --batch-size 512 --seed 42 \
+    --no-pairing-cache --reference-tokens --reference-mode bivector
+
+# collect every run under ./runs into the paper's table
+python -m paper1_demo.gatr_lite.scripts.aggregate_ablation \
+    --runs-dir ./runs --data-dir ./data --out ablation_summary.csv
+```
+
+`aggregate_ablation.py` scores each run on the same held-back events,
+pairs configurations by seed, and reports the paired differences with
+DeLong uncertainties (`training/auc_stats.py`). Paired differences are
+what the paper quotes: the effects under test are of the same order as
+the seed-to-seed scatter, so differences of across-seed means would be
+too noisy to read.
+
+### 7. Supporting measurements
+
+```bash
+# per-event discriminator distributions (Fig. 7)
+python -m paper1_demo.gatr_lite.scripts.score_discriminator \
+    --run ./runs/A5b_s42 --data-dir ./data --out ./runs/discr_A5b.npz --all-events
+
+# what each grade carries on this final state (Sec. 7.1)
+python -m paper1_demo.gatr_lite.scripts.measure_grade_physics --data-dir ./data
+
+# numerical dynamic range per grade (Sec. 8.1)
+python -m paper1_demo.gatr_lite.scripts.measure_grade_ranges --data-dir ./data
+
+# is the pseudoscalar sign asymmetry physical, or an artefact of parton
+# labelling? (Sec. 8.1)
+python -m paper1_demo.gatr_lite.scripts.cp_asymmetry_check --data-dir ./data
+```
+
 ## Architecture notes
 
-The GA network operates on six 4-momentum tokens plus two
-*pairing-aware tokens* whose grade-0/-1/-3 components encode pre-computed
+The network has two input branches, and the ablation above walks
+between them. In the **per-particle** branch each of the six partons is
+one token carrying its 4-momentum at grade 1 and its type one-hot at
+grade 0; every higher grade is left empty and is formed inside the
+network by attention across tokens and by the geometric product within
+a token. In the **pairing** branch two further event-level tokens
+arrive with grades 1-3 already filled by the resonance-topology
+candidates. Appendix D of the paper lays out both token formats cell by
+cell.
+
+The pairing tokens carry, at grades 0/1/3, pre-computed
 Cayley–Menger-equivalent features ($s_{\rm had}^{(a)}$, $s_{\rm lep}^{(a)}$,
 $\sigma_\pm^{Wb}$, $m_W^{(a)}$, $T^{(a)} = p_{j_1}\wedge p_{j_2}\wedge p_b$,
 $\star T^{(a)}$). All quantities live in $\mathrm{Cl}(1,3)$ with the
@@ -215,9 +284,14 @@ Each of the three GATr blocks consists of (i) a per-grade
 channel mixing, and (iii) a `ScalarAttention` whose logits are Lorentz
 invariants. The readout takes the grade-0 part of the final tokens
 followed by a permutation-invariant mean pool and a small dense head.
-Equivariance under the full $\mathrm{Spin}^+(1,3)$ holds by
-construction and is verified by `tests/test_equivariance.py` to a
-tolerance of $10^{-5}$.
+Equivariance under the full $\mathrm{Spin}^+(1,3)$ follows from the
+per-grade structure of the layers and is verified numerically by
+`tests/test_equivariance.py` to a tolerance of $10^{-5}$.
+`tests/test_ablation_knobs.py` checks that the ablation flags change
+what the input carries without changing the parameter count or breaking
+equivariance, and `tests/test_hlhc_reference.py` checks that the fixed
+$\gamma_{03}$ token is invariant under both generators of the residual
+collider symmetry while $\gamma_0,\gamma_3$ separately are not.
 
 ## License
 
@@ -232,5 +306,15 @@ MIT — see [`../../LICENSE`](../../LICENSE).
 
 ## How to cite
 
-A citation entry for the accompanying paper will be added here when
-the preprint is released.
+```bibtex
+@article{higen-paper1,
+  author  = {Abasov, E. and Dudko, L. V. and Grigoryev, F. and
+             Volkov, P. and Zaborenko, A.},
+  title   = {Geometric algebra as the input language of collider
+             foundation models},
+  journal = {arXiv preprint},
+  eprint  = {2605.15910},
+  archivePrefix = {arXiv},
+  year    = {2026},
+}
+```

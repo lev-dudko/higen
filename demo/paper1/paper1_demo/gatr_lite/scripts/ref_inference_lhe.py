@@ -1,8 +1,8 @@
 """CLI: REF baseline inference on raw LHE ROOT samples (DR1 / tT / full tT_tWb).
 
 Reads the 75 inputVarNames + means + sigmas from the REF training config
-``tT_DR_Parton_PtJ4x10C.py`` (kept alongside the Keras h5 in pvolkov's
-NN_RV_GG/tT_DR directory), recomputes the standardised var1..var75 from
+``tT_DR_Parton_PtJ4x10C.py`` (kept alongside the Keras h5 in the REF
+training directory), recomputes the standardised var1..var75 from
 the raw LHE branches via uproot expressions (which understands ``log(...)``
 on the fly), applies the same pt_Jet4>10 cut as the training pipeline,
 runs the RefMLP, and writes a 3-sample ``ref_predictions_lhe.npz``.

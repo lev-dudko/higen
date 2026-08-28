@@ -217,5 +217,5 @@ def auc_score(scores: np.ndarray, labels: np.ndarray,
     distinct = np.r_[np.diff(s) != 0, True]
     tpr = np.r_[0.0, tps[distinct]]
     fpr = np.r_[0.0, fps[distinct]]
-    trap = getattr(np, "trapezoid", np.trapz)
+    trap = np.trapezoid if hasattr(np, "trapezoid") else np.trapz  # trapz removed in NumPy 2.0
     return float(trap(tpr, fpr))

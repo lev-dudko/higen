@@ -257,6 +257,16 @@ def _build_parser() -> argparse.ArgumentParser:
                         "lr ramps from 0 to this peak over the first epochs.")
     p.add_argument("--weight-decay", type=float, default=1e-4)
     p.add_argument("--val-frac",   type=float, default=0.1)
+    p.add_argument("--train-frac", type=float, default=1.0,
+                   help="Keep only this fraction of the TRAINING subset, for "
+                        "the low-statistics scan. The validation subset is left "
+                        "untouched, so a reduced-statistics run is scored on "
+                        "exactly the same events as the full-statistics run of "
+                        "the same seed and the paired comparison stays valid. "
+                        "The kept training events are the first n_keep of the "
+                        "permutation that already defines the split, so the "
+                        "1/10 subset is a subset of the 1/3 subset — the scan "
+                        "is nested rather than independent draws.")
     p.add_argument("--seed",       type=int,   default=42)
     p.add_argument("--device",     default="cuda")
     p.add_argument("--warmup-epochs", type=int, default=5,
@@ -322,6 +332,31 @@ def _build_parser() -> argparse.ArgumentParser:
                         "the first N epochs (model.set_join_alpha). Lets the "
                         "standard stack settle before adding antisymmetric-wedge "
                         "contributions; mitigates early-epoch instability.")
+    # --- input-representation ablations (SciPost Report #1, points 10, 11) ---
+    p.add_argument("--pairing-content",      default="full",
+                   choices=["full", "no_meet", "scalars_only"],
+                   help="Covariant content of the two pairing tokens. 'full' "
+                        "(default) = grade 1 + 2 + 3 as described in the paper; "
+                        "'no_meet' drops the grade-2 meet bivector; "
+                        "'scalars_only' drops all covariant content and keeps "
+                        "the grade-0 pairing invariants. Parameter count is "
+                        "unchanged in all three cases.")
+    p.add_argument("--reference-tokens",     dest="reference_tokens",
+                   action="store_true", default=False,
+                   help="Append fixed gamma_0 (time) and gamma_3 (beam-axis) "
+                        "reference tokens, making the H_LHC-invariants "
+                        "accessible as scalar products without any change to "
+                        "the architecture.")
+    p.add_argument("--reference-mode",       default="vectors",
+                   choices=["vectors", "bivector"],
+                   help="Which reference object the tokens carry. 'vectors' = "
+                        "gamma_0 + gamma_3 (supplies the ingredients of p_T, y, "
+                        "phi but is NOT H_LHC-invariant); 'bivector' = gamma_03 "
+                        "(H_LHC-equivariant by construction).")
+    p.add_argument("--grade0-only",          dest="grade0_only",
+                   action="store_true", default=False,
+                   help="Zero every grade>=1 input channel, leaving Lorentz "
+                        "scalars only (PELICAN-like limit of the input).")
     return p
 
 
@@ -379,6 +414,21 @@ def main(argv=None) -> int:
     ds_full   = MultiH5Dataset([ds_signal, ds_bkg])
 
     train_sub, val_sub = make_train_val_split(ds_full, args.val_frac, args.seed)
+
+    # Low-statistics scan: thin the TRAINING subset only. val_sub is untouched,
+    # so every fraction of a given seed is scored on identical events and the
+    # paired comparison against the full-statistics run remains meaningful.
+    # Subsetting keeps the leading n_keep entries of the split permutation,
+    # which makes the fractions nested (1/10 ⊂ 1/3 ⊂ full).
+    if not 0.0 < args.train_frac <= 1.0:
+        raise SystemExit(f"--train-frac must be in (0, 1], got {args.train_frac}")
+    if args.train_frac < 1.0:
+        n_before = len(train_sub)
+        n_keep = max(1, int(round(n_before * args.train_frac)))
+        train_sub = Subset(train_sub, list(range(n_keep)))
+        logger.info("low-statistics scan: train %d -> %d events (frac %.4g); "
+                    "val untouched at %d", n_before, n_keep, args.train_frac,
+                    len(val_sub))
 
     train_labels = _collect_labels(train_sub)
     val_labels   = _collect_labels(val_sub)
@@ -440,6 +490,10 @@ def main(argv=None) -> int:
         gp_grade3_mixing=args.gp_grade3_mixing,
         use_join_block=args.use_join_block,
         use_pairing_cache=args.use_pairing_cache,
+        pairing_content=args.pairing_content,
+        reference_tokens=args.reference_tokens,
+        reference_mode=args.reference_mode,
+        grade0_only=args.grade0_only,
     )
     logger.info("Model config: %s", asdict(model_cfg))
     model = GATrLite(model_cfg).to(device)
