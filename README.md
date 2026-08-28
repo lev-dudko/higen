@@ -10,7 +10,7 @@ publications listed below.
 | Path | What is in it |
 |------|---------------|
 | `demo/paper1/` | Self-contained reference implementation of the GATr-lite demo used in our first paper: a Lorentz-equivariant classifier that separates single-resonant $tWb$ from double-resonant $t\bar t$ production at the LHE parton level (14 TeV, CompHEP 4.5.2rc12). Includes pretrained weights, a 75-feature MLP baseline, and the eight-configuration input ablation of the revised paper. |
-| `doc/paper1/` | Final PDF of the first paper. *(Coming soon.)* |
+| `doc/paper1/` | PDF of the paper (revised version). |
 
 ## Why this exists
 

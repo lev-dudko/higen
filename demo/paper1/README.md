@@ -27,10 +27,13 @@ Quoted uncertainties are the spread over the five seeds. The reference
 bivector is a fixed, weightless token encoding the beam plane, so it
 leaves the parameter count unchanged.
 
-The GA-network checkpoint of one representative seed is shipped under
-[`checkpoints/`](checkpoints/) and the REF Keras weights under
-[`weights/`](weights/), so the eval/plot pipeline can be run without
-re-training.
+Two GA-network checkpoints are shipped under
+[`checkpoints/`](checkpoints/) — `full_v1_alldata_seed42` (the pairing
+configuration of the first release) and `refbivector_seed42` (the
+reference-bivector configuration the revised paper reports, 149 409
+parameters) — together with the REF Keras weights under
+[`weights/`](weights/), so the eval and plotting steps can be run
+without re-training.
 
 ## Repository layout
 
