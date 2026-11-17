@@ -28,12 +28,12 @@ bivector is a fixed, weightless token encoding the beam plane, so it
 leaves the parameter count unchanged.
 
 Two GA-network checkpoints are shipped under
-[`checkpoints/`](checkpoints/) — `full_v1_alldata_seed42` (the pairing
-configuration of the first release) and `refbivector_seed42` (the
-reference-bivector configuration the revised paper reports, 149 409
-parameters) — together with the REF Keras weights under
-[`weights/`](weights/), so the eval and plotting steps can be run
-without re-training.
+[`checkpoints/`](checkpoints/): `pairing_seed42` (the configuration with
+pairing grades 1,2,3, 151 489 parameters) and `refbivector_seed42` (the
+reference-bivector configuration, 149 409 parameters). They are the
+final-epoch weights of the seed-42 runs shown in the two panels of Fig. 7.
+The REF Keras weights are under [`weights/`](weights/), so the eval and
+plotting steps can be run without re-training.
 
 ## Repository layout
 
@@ -42,7 +42,7 @@ demo/paper1/
 ├── README.md                 # this file
 ├── pyproject.toml            # `pip install -e .` works from this directory
 ├── requirements.txt
-├── checkpoints/              # GATr-lite best.pt + config.json (seed 42)
+├── checkpoints/              # GATr-lite final-epoch weights + config.json (seed 42)
 ├── weights/                  # REF baseline Keras h5 (Boos:2023kpp)
 └── paper1_demo/
     └── gatr_lite/
