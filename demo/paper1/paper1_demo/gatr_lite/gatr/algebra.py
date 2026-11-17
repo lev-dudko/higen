@@ -121,6 +121,11 @@ def _build_dense_cayley() -> np.ndarray:
 
 
 CAYLEY_DENSE: np.ndarray = _build_dense_cayley()
+# The outer product keeps only the component of grade grade(a) + grade(b).
+_grades = np.asarray(BASIS_GRADES)
+WEDGE_DENSE: np.ndarray = CAYLEY_DENSE * (
+    _grades[None, None, :] == _grades[:, None, None] + _grades[None, :, None]
+)
 
 
 # ---------------------------------------------------------------------------

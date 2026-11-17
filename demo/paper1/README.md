@@ -71,11 +71,17 @@ from $W^-$); the hadronic side decays to $u + \bar d$ from $W^+$.
 
 The three LHE files are:
 
-| Sample | Diagrams | $\sigma$ (pb) | Events after cut | Role |
-|---|---|---:|---:|---|
-| **DR1** | single-resonant $tWb$ only | 4.85 | 267 983 | signal (label 1) |
-| **tT** | double-resonant $t\bar t$ only | 18.55 | 10 115 042 | background (label 0) |
-| **full** | full gauge-invariant SM | 22.08 | 805 639 | cross-check |
+| Sample | Diagrams | $\sigma$ (pb) | Events after cut | $\sigma$ after cut (pb) | Role |
+|---|---|---:|---:|---:|---|
+| **DR1** | single-resonant $tWb$ only | 4.85 | 267 983 | 1.19 | signal (label 1) |
+| **tT** | double-resonant $t\bar t$ only | 18.55 | 10 115 042 | 17.06 | background (label 0) |
+| **full** | full gauge-invariant SM | 22.08 | 805 639 | 17.79 | cross-check |
+
+The first cross section is that of the LHE file. The selection cut keeps
+24.5%, 92.0% and 80.6% of the events of the three samples, so
+distributions of the selected events are normalised to the cross section
+after the cut, `xsec_pb * n_passed_cut / n_total_in_file`
+(`xsec_selected_pb` of the datasets in `data/dataset.py`).
 
 ## Downloading the LHE samples
 
@@ -221,7 +227,7 @@ rather than about capacity.
 | grade 0 only | 151 489 | $0.9627 \pm 0.0003$ | `--grade0-only` |
 | + pairing invariants | 151 489 | $0.9650 \pm 0.0003$ | `--pairing-content scalars_only` |
 | + pairing grades 1,2,3 | 151 489 | $0.9649 \pm 0.0008$ | *(default)* |
-| + grade-4 join | 196 609 | $0.9652 \pm 0.0009$ | `--use-join-block` |
+| + grade-4 join | 196 609 | $0.9653 \pm 0.0013$ | `--use-join-block` |
 | + pairing 1,3 (no meet) | 151 489 | $0.9657 \pm 0.0009$ | `--pairing-content no_meet` |
 | grade 0⊕1 four-momenta | 149 409 | $0.9669 \pm 0.0007$ | `--no-pairing-cache` |
 | + reference tokens $\gamma_0,\gamma_3$ | 149 409 | $0.9670 \pm 0.0004$ | `--no-pairing-cache --reference-tokens --reference-mode vectors` |
@@ -249,9 +255,16 @@ too noisy to read.
 ### 7. Supporting measurements
 
 ```bash
-# per-event discriminator distributions (Fig. 7)
+# per-event discriminator distributions (Fig. 7): score the pairing run (A3)
+# and the reference-bivector run (A5b), then plot d(sigma)/dD normalised to the
+# cross sections after the selection cut, with the sum tW + ttbar for comparison
+python -m paper1_demo.gatr_lite.scripts.score_discriminator \
+    --run ./runs/A3_s42 --data-dir ./data --out ./runs/discr_A3.npz --all-events
 python -m paper1_demo.gatr_lite.scripts.score_discriminator \
     --run ./runs/A5b_s42 --data-dir ./data --out ./runs/discr_A5b.npz --all-events
+python -m paper1_demo.gatr_lite.scripts.plot_discriminator \
+    --pairing ./runs/discr_A3.npz --bivector ./runs/discr_A5b.npz \
+    --data-dir ./data --out ./runs/gatr_discriminator
 
 # what each grade carries on this final state (Sec. 7.1)
 python -m paper1_demo.gatr_lite.scripts.measure_grade_physics --data-dir ./data

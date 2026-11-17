@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Tuple
+from typing import Literal, Tuple
 
 import torch
 from torch import nn
@@ -164,10 +164,12 @@ class ScalarAttention(nn.Module):
     transform as multivectors, the attention output is itself equivariant.
     """
 
-    def __init__(self, channels: int, attn_channels: int | None = None):
+    def __init__(self, channels: int, attn_channels: int | None = None,
+                 scores_fp64: bool = False) -> None:
         super().__init__()
         self.channels = channels
         self.attn_channels = attn_channels or channels
+        self.scores_fp64 = scores_fp64
         self.q_proj = EquivariantLinear(channels, self.attn_channels, bias_scalar=False)
         self.k_proj = EquivariantLinear(channels, self.attn_channels, bias_scalar=False)
         self.v_proj = EquivariantLinear(channels, channels, bias_scalar=False)
@@ -195,10 +197,13 @@ class ScalarAttention(nn.Module):
         B_, T_, C_, _ = q_rev_cay.shape
         q2d = q_rev_cay.reshape(B_, T_, C_ * 16)
         k2d = k.contiguous().reshape(B_, T_, C_ * 16)
+        # After the wedge Q and K can be finite while Q·K already overflows float32.
+        if self.scores_fp64:
+            q2d, k2d = q2d.double(), k2d.double()
         # scores[b, i, j] = sum_{c, q} q_rev_cay[b, i, c, q] * k[b, j, c, q]
         scores = torch.bmm(q2d, k2d.transpose(1, 2))
         scores = scores / math.sqrt(self.attn_channels * 16)
-        attn = torch.softmax(scores, dim=-1)  # over keys
+        attn = torch.softmax(scores, dim=-1).to(v.dtype)  # over keys
         # Mix values: out[b, i, c, k] = sum_j attn[b, i, j] v[b, j, c, k]
         # bmm form, mirrors the score computation above.
         Bv, Tv, Cv, Kv = v.shape
@@ -228,7 +233,8 @@ class MultiHeadScalarAttention(nn.Module):
     ``n_heads=1`` the layer is functionally identical to ``ScalarAttention``.
     """
 
-    def __init__(self, channels: int, n_heads: int = 1, attn_channels: int | None = None):
+    def __init__(self, channels: int, n_heads: int = 1,
+                 attn_channels: int | None = None, scores_fp64: bool = False) -> None:
         super().__init__()
         if channels % n_heads != 0:
             raise ValueError(
@@ -236,6 +242,7 @@ class MultiHeadScalarAttention(nn.Module):
             )
         self.channels = channels
         self.n_heads = n_heads
+        self.scores_fp64 = scores_fp64
         self.head_dim = channels // n_heads
         # Per-head Q/K width; defaults to head_dim if not specified.
         self.attn_channels = attn_channels or self.head_dim
@@ -271,8 +278,10 @@ class MultiHeadScalarAttention(nn.Module):
             B_, T_, C_, _ = q_rev_cay.shape
             q2d = q_rev_cay.reshape(B_, T_, C_ * 16)
             k2d = k.contiguous().reshape(B_, T_, C_ * 16)
+            if self.scores_fp64:
+                q2d, k2d = q2d.double(), k2d.double()
             scores = torch.bmm(q2d, k2d.transpose(1, 2)) * scale
-            attn = torch.softmax(scores, dim=-1)
+            attn = torch.softmax(scores, dim=-1).to(v.dtype)
 
             Bv, Tv, Cv, Kv = v.shape
             v2d = v.contiguous().reshape(Bv, Tv, Cv * Kv)
@@ -308,29 +317,30 @@ class GatedActivation(nn.Module):
 
 
 # ---------------------------------------------------------------------------
-# JoinProduct: anti-symmetrised geometric product (explicit wedge layer)
+# JoinProduct: outer product with learnable channel mixing
 # ---------------------------------------------------------------------------
 
 class JoinProduct(nn.Module):
-    """Anti-symmetrised geometric product.
+    """Outer product of multivectors after two channel projections.
 
-    For pure-grade A (grade k) and B (grade l), gp(A,B) = A∧B + lower-grade
-    contractions; the anti-symmetric part isolates the wedge component
-    (grade k+l) up to inner-product corrections. Concretely::
+    For each pair of homogeneous components it keeps the grade k+l;
+    it extends bilinearly to mixed grades. The ``commutator`` mode
+    reproduces old checkpoints with the operation (xy-yx)/2.
 
-        out_c = sum_{a,b} W[c,a,b] * (gp(x_a, y_b) - gp(y_b, x_a)) / 2
-
-    This biases the layer to build "join" objects (higher-grade products
-    like 3-blades and pseudoscalars) that the symmetric GeometricProduct
-    underplays, since gp(x, x) is symmetric and its wedge part vanishes.
-
-    Equivariance is preserved: gp itself is equivariant, and the
-    antisymmetric combination of two equivariant maps is equivariant.
+    Args:
+        in_channels: Number of input channels.
+        out_channels: Number of output channels.
+        mid_channels: Number of channels after the projections.
+        product: Outer product or the historical commutator.
     """
 
     def __init__(self, in_channels: int, out_channels: int,
-                 mid_channels: int | None = None):
+                 mid_channels: int | None = None,
+                 product: Literal["wedge", "commutator"] = "wedge") -> None:
         super().__init__()
+        if product not in ("wedge", "commutator"):
+            raise ValueError(f"Unknown join product: {product!r}")
+        self.product = product
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.mid_channels = mid_channels or max(4, min(in_channels, 8))
@@ -347,11 +357,13 @@ class JoinProduct(nn.Module):
             y = x
         xp = self.proj_x(x)  # (B, T, M, 16)
         yp = self.proj_y(y)  # (B, T, M, 16)
-        cay = torch.as_tensor(A.CAYLEY_DENSE, dtype=x.dtype, device=x.device)
-        gp_xy = torch.einsum("...ai,...bj,ijk->...abk", xp, yp, cay)
-        gp_yx = torch.einsum("...bj,...ai,ijk->...abk", yp, xp, cay)
-        wedge_pair = 0.5 * (gp_xy - gp_yx)
-        out = torch.einsum("...abk,oab->...ok", wedge_pair, self.combine)
+        table = A.WEDGE_DENSE if self.product == "wedge" else A.CAYLEY_DENSE
+        cay = torch.as_tensor(table, dtype=x.dtype, device=x.device)
+        pair = torch.einsum("...ai,...bj,ijk->...abk", xp, yp, cay)
+        if self.product == "commutator":
+            gp_yx = torch.einsum("...bj,...ai,ijk->...abk", yp, xp, cay)
+            pair = 0.5 * (pair - gp_yx)
+        out = torch.einsum("...abk,oab->...ok", pair, self.combine)
         return out
 
 
@@ -360,37 +372,40 @@ class JoinProduct(nn.Module):
 # ---------------------------------------------------------------------------
 
 class JoinBlock(nn.Module):
-    """A single residual block built around the antisymmetric wedge.
+    """Residual block: JoinProduct, attention and a scalar gate.
 
-    Used after the stack of standard GATrBlocks: gives the network a direct
-    way to construct grade-(k+l) objects (e.g. 4-blades from 3-blades and
-    1-blades) which encode CP-odd / coplanarity invariants needed for
-    pairing resolution. Without this, the network has to recover them
-    indirectly through deep gp-residual interactions.
+    Args:
+        cfg: Sizes and settings of the block.
+        product: JoinProduct operation; ``commutator`` for old models.
+        attention_fp64: Evaluate Q·K and the softmax in float64, keeping the dtype of the values.
     """
 
-    def __init__(self, cfg: BlockConfig | None = None):
+    def __init__(self, cfg: BlockConfig | None = None,
+                 product: Literal["wedge", "commutator"] = "wedge",
+                 attention_fp64: bool = False) -> None:
         super().__init__()
         cfg = cfg or BlockConfig()
         self.cfg = cfg
         C = cfg.channels
         self.join_pre = EquivariantLinear(C, C, bias_scalar=False)
-        self.join = JoinProduct(C, C, mid_channels=cfg.gp_mid_channels)
+        self.join = JoinProduct(C, C, mid_channels=cfg.gp_mid_channels, product=product)
         self.join_post = EquivariantLinear(C, C)
 
         self.attn_pre = EquivariantLinear(C, C, bias_scalar=False)
         if cfg.n_heads > 1:
             self.attn = MultiHeadScalarAttention(
                 C, n_heads=cfg.n_heads, attn_channels=cfg.attn_channels,
+                scores_fp64=attention_fp64,
             )
         else:
-            self.attn = ScalarAttention(C, attn_channels=cfg.attn_channels)
+            self.attn = ScalarAttention(C, attn_channels=cfg.attn_channels,
+                                        scores_fp64=attention_fp64)
 
         self.gate_pre = EquivariantLinear(C, C, bias_scalar=False)
         self.gate = GatedActivation(C)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # Join residual (antisymmetrised wedge).
+        # Join residual.
         h = self.join_pre(x)
         h = self.join(h, h)
         h = self.join_post(h)

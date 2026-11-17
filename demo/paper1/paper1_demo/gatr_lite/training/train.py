@@ -61,6 +61,8 @@ logger = logging.getLogger(__name__)
 
 def _roc_auc(scores: np.ndarray, labels: np.ndarray) -> float:
     """Mann-Whitney U based AUC (no sklearn dependency)."""
+    if not np.isfinite(scores).all():
+        raise ValueError("Non-finite scores cannot be used to compute AUC")
     if labels.min() == labels.max():
         return float("nan")
     order = np.argsort(scores, kind="mergesort")
@@ -160,17 +162,22 @@ def _epoch_train(model, loader, optim, loss_fn, device, grad_clip: float = 1.0) 
     model.train()
     total = 0.0
     n = 0
-    for batch in loader:
+    for step, batch in enumerate(loader):
         b = _move_batch(batch, device)
         logits = model(b["p4"], b["pdg"]).squeeze(-1)
         loss = loss_fn(logits, b["label"])
+        if not torch.isfinite(logits).all() or not torch.isfinite(loss):
+            raise FloatingPointError(f"Non-finite train logits/loss at batch {step}")
         optim.zero_grad(set_to_none=True)
         loss.backward()
         # Clip gradient norm. Without this a rare high-energy outlier in tT
         # (E ~ TeV) can produce huge geometric-product activations that
         # explode loss to >100 and trigger non-recovery weight collapse.
-        if grad_clip and grad_clip > 0:
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=grad_clip)
+        # Even with clipping disabled, non-finite gradients forbid the AdamW step.
+        torch.nn.utils.clip_grad_norm_(
+            model.parameters(), max_norm=grad_clip if grad_clip > 0 else math.inf,
+            error_if_nonfinite=True,
+        )
         optim.step()
         total += float(loss.detach()) * b["label"].numel()
         n += b["label"].numel()
@@ -184,10 +191,12 @@ def _epoch_eval(model, loader, loss_fn, device) -> Tuple[float, float, float]:
     n = 0
     all_scores: List[np.ndarray] = []
     all_labels: List[np.ndarray] = []
-    for batch in loader:
+    for step, batch in enumerate(loader):
         b = _move_batch(batch, device)
         logits = model(b["p4"], b["pdg"]).squeeze(-1)
         loss = loss_fn(logits, b["label"])
+        if not torch.isfinite(logits).all() or not torch.isfinite(loss):
+            raise FloatingPointError(f"Non-finite validation logits/loss at batch {step}")
         total += float(loss) * b["label"].numel()
         n += b["label"].numel()
         all_scores.append(torch.sigmoid(logits).detach().cpu().numpy())
@@ -320,6 +329,10 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-join-block",        dest="use_join_block",
                    action="store_false",
                    help="Disable the JoinBlock (ablation).")
+    p.add_argument("--join-product", default="wedge", choices=["wedge", "commutator"],
+                   help="Join operation; commutator reproduces historical runs.")
+    p.add_argument("--join-attention-fp64", action=argparse.BooleanOptionalAction, default=True,
+                   help="Compute JoinBlock Q·K and softmax in float64; disable for historical numerics.")
     p.add_argument("--use-pairing-cache",    dest="use_pairing_cache",
                    action="store_true", default=True,
                    help="Append the two event-level pairing tokens (default).")
@@ -330,7 +343,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--join-warmup-epochs",   type=int, default=0,
                    help="Linearly ramp JoinBlock contribution α from 0 to 1 over "
                         "the first N epochs (model.set_join_alpha). Lets the "
-                        "standard stack settle before adding antisymmetric-wedge "
+                        "standard stack settle before adding JoinBlock "
                         "contributions; mitigates early-epoch instability.")
     # --- input-representation ablations (SciPost Report #1, points 10, 11) ---
     p.add_argument("--pairing-content",      default="full",
@@ -489,6 +502,8 @@ def main(argv=None) -> int:
         input_dropout=args.input_dropout,
         gp_grade3_mixing=args.gp_grade3_mixing,
         use_join_block=args.use_join_block,
+        join_product=args.join_product,
+        join_attention_fp64=args.join_attention_fp64,
         use_pairing_cache=args.use_pairing_cache,
         pairing_content=args.pairing_content,
         reference_tokens=args.reference_tokens,
@@ -610,6 +625,10 @@ def main(argv=None) -> int:
             "model_state": (model._orig_mod.state_dict()
                              if hasattr(model, "_orig_mod") else model.state_dict()),
             "optim_state": optim.state_dict(),
+            "scheduler_state": scheduler.state_dict(),
+            "rng_state": torch.get_rng_state(),
+            "cuda_rng_state_all": torch.cuda.get_rng_state_all() if device.type == "cuda" else [],
+            "numpy_rng_state": np.random.get_state(),
             "val_auc":     val_auc,
             "val_loss":    val_loss,
             "args":        vars(args),

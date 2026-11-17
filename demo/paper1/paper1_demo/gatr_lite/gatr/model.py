@@ -165,11 +165,13 @@ class GATrLiteConfig:
     # regulariser; equivariance is preserved because pairing scalars are
     # Lorentz invariants.
     input_dropout: float = 0.0
-    # Group B: append one JoinBlock (antisymmetric-wedge residual) after the
-    # standard stack. Lets the network build grade-(k+l) objects directly
-    # — needed for CP-odd / 4-blade pseudoscalar invariants without relying
-    # on deep gp-residual interactions through symmetric GeometricProduct.
+    # Optional JoinBlock after the main sequence of blocks.
     use_join_block: bool = True
+    # Old configurations without this field must keep the previous operation.
+    # training.train selects the wedge explicitly for new runs.
+    join_product: str = "commutator"
+    # A missing field in an old checkpoint means the previous float32 attention.
+    join_attention_fp64: bool = False
 
     # ---------------------------------------------------------------------
     # Input-ablation knobs (Tab. 3 and Fig. 5 of the paper).
@@ -318,12 +320,16 @@ class GATrLite(nn.Module):
         self.blocks = nn.ModuleList([GATrBlock(block_cfg) for _ in range(self.cfg.n_blocks)])
         # Optional JoinBlock after the stack. Same BlockConfig as the
         # standard blocks so it inherits multi-head / dropout settings.
-        self.join_block = JoinBlock(block_cfg) if self.cfg.use_join_block else None
+        self.join_block = (
+            JoinBlock(block_cfg, product=self.cfg.join_product,
+                      attention_fp64=self.cfg.join_attention_fp64)
+            if self.cfg.use_join_block else None
+        )
         # JoinBlock-warmup factor (0..1). When < 1, the JoinBlock output is
         # blended with the pre-JoinBlock state x:  x ← x + α·(JoinBlock(x) − x).
         # α=0 disables JoinBlock entirely; α=1 applies it fully. Ramped from
         # the train loop over the first few epochs to let the standard stack
-        # settle before adding antisymmetric-wedge contributions.
+        # settle before adding JoinBlock contributions.
         self._join_alpha: float = 1.0
 
         # Head MLP. arch_v2 inserts dropout between Linear/GELU layers.

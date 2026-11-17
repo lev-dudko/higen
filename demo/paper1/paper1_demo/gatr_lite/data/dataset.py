@@ -34,6 +34,27 @@ except ImportError:  # pragma: no cover
 logger = logging.getLogger(__name__)
 
 
+def _selected_xsec(xsec_pb: float, n_passed: int, n_total: int) -> float:
+    """Cross section of a sample after the event selection, in pb.
+
+    The file attribute ``xsec_pb`` is the cross section of the LHE file BEFORE
+    the selection applied in ``preprocess.py`` (pT of the fourth jet).  The
+    selection keeps ``n_passed_cut`` of ``n_total_in_file`` events, so the cross
+    section of the events stored in the file is
+
+        xsec_pb * n_passed_cut / n_total_in_file.
+
+    Dividing ``xsec_pb`` itself by the number of stored events overstates a
+    distribution by 1/efficiency.  The efficiencies of the three paper1 samples
+    differ (tW 0.245, ttbar 0.920, full matrix element 0.806), so such curves
+    are not comparable with each other.  Files without the two counts fall back
+    to ``xsec_pb``.
+    """
+    if n_total > 0 and 0 < n_passed <= n_total:
+        return xsec_pb * n_passed / n_total
+    return xsec_pb
+
+
 class PartonH5Dataset(Dataset):
     """Single-file parton dataset backed by an HDF5 file.
 
@@ -71,6 +92,7 @@ class PartonH5Dataset(Dataset):
             self._xerr_pb = float(f.attrs.get("xerr_pb", 0.0))
             self._label   = int(f.attrs.get("label", -1))
             self._n_total = int(f.attrs.get("n_total_in_file", 0))
+            self._n_passed = int(f.attrs.get("n_passed_cut", 0))
             self._generator = str(f.attrs.get("generator", ""))
 
         logger.debug(
@@ -95,11 +117,16 @@ class PartonH5Dataset(Dataset):
         return self._len  # type: ignore[return-value]
 
     @property
+    def xsec_selected_pb(self) -> float:
+        """Cross section after the event selection of ``preprocess.py`` (pb)."""
+        return _selected_xsec(self._xsec_pb, self._n_passed, self._n_total)
+
+    @property
     def event_weight(self) -> float:
-        """xsec_pb / n_events: weight per event for cross-section normalised plots."""
+        """xsec_selected_pb / n_events: weight per event for cross-section normalised plots."""
         if self._len == 0:
             return 0.0
-        return self._xsec_pb / self._len
+        return self.xsec_selected_pb / self._len
 
     # ------------------------------------------------------------------
     # Lazy file handle
@@ -191,6 +218,8 @@ class InMemoryPartonDataset(Dataset):
                 self._label = f["label"][idx].astype(np.int64)
             self._xsec_pb = float(f.attrs.get("xsec_pb", 0.0))
             self._n_total_in_file = n_total
+            self._n_lhe = int(f.attrs.get("n_total_in_file", 0))
+            self._n_passed = int(f.attrs.get("n_passed_cut", 0))
 
         self._len = len(self._p4)
         nbytes = self._p4.nbytes + self._pdg.nbytes + self._label.nbytes
@@ -207,10 +236,16 @@ class InMemoryPartonDataset(Dataset):
         return self._xsec_pb
 
     @property
+    def xsec_selected_pb(self) -> float:
+        """Cross section after the event selection of ``preprocess.py`` (pb)."""
+        return _selected_xsec(self._xsec_pb, self._n_passed, self._n_lhe)
+
+    @property
     def event_weight(self) -> float:
+        """xsec_selected_pb / n_events: weight per event for cross-section normalised plots."""
         if self._len == 0:
             return 0.0
-        return self._xsec_pb / self._len
+        return self.xsec_selected_pb / self._len
 
     @property
     def labels(self) -> np.ndarray:

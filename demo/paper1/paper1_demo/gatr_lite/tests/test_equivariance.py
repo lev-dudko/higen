@@ -207,7 +207,7 @@ def test_gatr_block_equivariance():
 
 
 def test_join_product_equivariance():
-    """JoinProduct = anti-symmetrised gp must be equivariant under sandwich."""
+    """The outer product must preserve equivariance."""
     torch.manual_seed(SEED)
     rng = np.random.default_rng(SEED)
     layer = JoinProduct(4, 4, mid_channels=4).double()
@@ -233,7 +233,9 @@ def test_join_block_equivariance():
         assert err < 1e-4, f"JoinBlock equivariance err={err}"
 
 
-def test_gatr_lite_logit_invariance():
+@pytest.mark.parametrize("product", ["wedge", "commutator"])
+@pytest.mark.parametrize("attention_fp64", [False, True])
+def test_gatr_lite_logit_invariance(product: str, attention_fp64: bool) -> None:
     """The full classifier produces a logit that is Lorentz-invariant.
 
     This test exercises the legacy 6-token architecture (use_pairing_cache=False);
@@ -244,6 +246,8 @@ def test_gatr_lite_logit_invariance():
     cfg = GATrLiteConfig(
         channels=8, gp_mid_channels=4, attn_channels=4, head_hidden=16,
         use_pairing_cache=False,
+        join_product=product,
+        join_attention_fp64=attention_fp64,
     )
     model = GATrLite(cfg).double()
     model.eval()

@@ -7,7 +7,8 @@ load_model(checkpoint_path, device)
 
 predict_h5(model, h5_path, device, batch_size)
     Run the model on every event of a preprocessed HDF5 file and return
-    (scores, labels, xsec_pb, weights) where weights = xsec_pb / N_events.
+    (scores, labels, xsec_pb, weights) where xsec_pb is the cross section after
+    the event selection and weights = xsec_pb / N_events.
 
 CLI
 ---
@@ -131,7 +132,9 @@ def predict_h5(
 ) -> Dict[str, np.ndarray | float]:
     """Run inference on every event of an HDF5 file.
 
-    Returns a dict with keys: scores, labels, xsec_pb, n_events, weights.
+    Returns a dict with keys: scores, labels, xsec_pb, xsec_lhe_pb, n_events,
+    weights.  ``xsec_pb`` is the cross section after the event selection and
+    ``xsec_lhe_pb`` the cross section of the LHE file before it.
     """
     # In-memory load: random/sequential access through gzip-chunked HDF5 is
     # unusably slow at scale (per-item __getitem__ stalls), so we eagerly
@@ -152,13 +155,16 @@ def predict_h5(
     scores_arr = np.concatenate(scores) if scores else np.zeros(0, dtype=np.float32)
     labels_arr = np.concatenate(labels) if labels else np.zeros(0, dtype=np.int64)
     n = len(ds)
-    xsec = ds.xsec_pb
+    # Cross section AFTER the event selection: the events in the file are the
+    # selected ones, so this is the normalisation of their distribution.
+    xsec = ds.xsec_selected_pb
     weight = (xsec / n) if n > 0 else 0.0
     weights = np.full(n, weight, dtype=np.float64)
     return {
         "scores":   scores_arr,
         "labels":   labels_arr,
         "xsec_pb":  float(xsec),
+        "xsec_lhe_pb": float(ds.xsec_pb),
         "n_events": int(n),
         "weights":  weights,
         "h5_path":  str(h5_path),
@@ -232,6 +238,7 @@ def main(argv=None) -> int:
         payload[f"{name}_labels"]  = out["labels"]
         payload[f"{name}_weights"] = out["weights"]
         payload[f"{name}_xsec_pb"] = np.array([out["xsec_pb"]], dtype=np.float64)
+        payload[f"{name}_xsec_lhe_pb"] = np.array([out["xsec_lhe_pb"]], dtype=np.float64)
         payload[f"{name}_n"]       = np.array([out["n_events"]], dtype=np.int64)
 
     np.savez(out_dir / "predictions.npz", **payload)
